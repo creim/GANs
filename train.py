@@ -8,6 +8,7 @@ import tensorflow.keras as keras
 import tf2lib as tl
 import tf2gan as gan
 import tqdm
+from skimage.measure import compare_ssim
 
 import data
 import module
@@ -19,12 +20,12 @@ import module
 
 py.arg('--dataset', default='horse2zebra')
 py.arg('--datasets_dir', default='datasets')
-py.arg('--load_size', type=int, default=512)  # load image to this size
-py.arg('--crop_size', type=int, default=400)  #then crop to this size, normal 256, jetzt mal schauen wie es mit vollen 512 läuft
+py.arg('--load_size', type=int, default=464)  # load image to this size
+py.arg('--crop_size', type=int, default=400)  #then crop to this size, default 256
 py.arg('--batch_size', type=int, default=1)
-py.arg('--epochs', type=int, default=100)
-py.arg('--epoch_decay', type=int, default=50) #epoch to start decaying learning rate
-py.arg('--lr', type=float, default=0.0002)
+py.arg('--epochs', type=int, default=150) #default 200
+py.arg('--epoch_decay', type=int, default=75) #epoch to start decaying learning rate, default 100
+py.arg('--lr', type=float, default=0.0002) #default 0.0002
 py.arg('--beta_1', type=float, default=0.5)
 py.arg('--adversarial_loss_mode', default='lsgan', choices=['gan', 'hinge_v1', 'hinge_v2', 'lsgan', 'wgan'])
 py.arg('--gradient_penalty_mode', default='none', choices=['none', 'dragan', 'wgan-gp'])
@@ -35,7 +36,7 @@ py.arg('--pool_size', type=int, default=25)  # pool size to store fake samples
 args = py.args()
 
 # output_dir
-output_dir = py.join('output4-new parameters', args.dataset)
+output_dir = py.join('output5-just watching MSe etc ', args.dataset)
 py.mkdir(output_dir)
 
 # save settings
@@ -185,6 +186,47 @@ except Exception as e:
 # summary
 train_summary_writer = tf.summary.create_file_writer(py.join(output_dir, 'summaries', 'train'))
 
+'''defining translation quality function, such as MSE, NCC, SSIM ...'''
+def MSE(target_img,styled_img):
+    '''Computing the Mean Squared Error - Using the tf math package
+    MSE -> 0 is great'''
+    if len(styled_img.shape) > 3:
+        styled_img = tf.squeeze(styled_img, axis = 0)
+    if len(target_img.shape) > 3:
+        target_img = tf.squeeze(target_img, axis = 0)
+    error = tf.math.square(tf.math.subtract(target_img, styled_img))
+    se = tf.math.reduce_sum(error)
+    mse = se/tf.size(error, out_type=tf.dtypes.float32)
+    return np.float(mse) #Converting tf.type to np.float for printing'''
+
+    
+def NCC(target_img, styled_img):
+    '''Computing the Normalized Cross correlation of two images
+    which is mathematically the cosine of angle between 
+    flattened out image arrays as 1D-vectors
+    NCC -> 1 is great'''
+    flat_target = tf.reshape(target_img, [-1])
+    flat_styled = tf.reshape(styled_img, [-1])
+    flat_target = np.array(flat_target)
+    flat_styled = np.array(flat_styled)
+    dot_product = np.dot(flat_target, flat_styled)
+    norm_product = np.linalg.norm(flat_target) * np.linalg.norm(flat_styled)
+    ncc = dot_product / norm_product
+    return ncc
+
+def SSIM(target_img, styled_img):
+    '''Computing the Structural Similarity Index SSIM 
+    using the skimage.metrics package'''
+    if len(styled_img.shape) > 3:
+        styled_img = tf.squeeze(styled_img, axis = 0)
+    if len(target_img.shape) > 3:
+        target_img = tf.squeeze(target_img, axis = 0)
+    target_img = np.array(target_img)
+    styled_img = np.array(styled_img)
+    ssim = compare_ssim(target_img, styled_img, multichannel=True)
+    return ssim   
+
+
 # getting sample of testset - translation is performed on these
 test_iter = iter(A_B_dataset_test)
 sample_dir = py.join(output_dir, 'samples_training')
@@ -213,6 +255,12 @@ with train_summary_writer.as_default():
                 A, B = next(test_iter)
                 A2B, B2A, A2B2A, B2A2B = sample(A, B)
                 img_sum = im.immerge(np.concatenate([A, A2B, A2B2A, B, B2A, B2A2B], axis=0), n_rows=2)
+                print('MSE before GAN: ', MSE(im.immerge(B), im.immerge(A)))
+                print('MSE after GAN: ', MSE(im.immerge(B), im.immerge(A2B)))
+                print('NCC before GAN: ', NCC(im.immerge(B), im.immerge(A)))
+                print('NCC after GAN: ', NCC(im.immerge(B), im.immerge(A2B)))
+                print('SSIM before GAN: ', SSIM(im.immerge(B), im.immerge(A)))
+                print('SSIM after GAN: ', SSIM(im.immerge(B), im.immerge(A2B)))
                 im.imwrite(img_sum, py.join(sample_dir, 'iter-%09d-overview.png' % G_optimizer.iterations.numpy()))
                 im.imwrite(im.immerge(A), py.join(sample_dir, 'iter-%09d-orginal-cbct.png' % G_optimizer.iterations.numpy()))
                 im.imwrite(im.immerge(A2B), py.join(sample_dir, 'iter-%09d-cbct2ct.png' % G_optimizer.iterations.numpy()))
